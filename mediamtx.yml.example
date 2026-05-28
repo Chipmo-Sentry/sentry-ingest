@@ -1,0 +1,103 @@
+# MediaMTX config — Chipmo Sentry v3 M1-LIVE Phase L0
+# TEMPLATE. Copy to mediamtx.yml and fill in real camera credentials.
+# mediamtx.yml is gitignored — never commit credentials.
+#
+# Standalone binary (no Docker) on Windows. See bin/mediamtx.exe.
+# Ref: docs/14-LIVE-PIPELINE-PLAN.md §2.
+
+###############################################################################
+# Global
+###############################################################################
+logLevel: info
+logDestinations: [stdout, file]
+logFile: mediamtx.log
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+# REST API for live status / cut control (used by L5 control plane)
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# Metrics endpoint
+metrics: no
+
+###############################################################################
+# RTSP server (listen) — used internally for sentry-ai to subscribe
+###############################################################################
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+rtspAuthMethods: [basic]
+
+###############################################################################
+# HLS server — used by sentry-frontend /live page (Phase L1)
+###############################################################################
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAllowOrigin: "*"
+
+###############################################################################
+# WebRTC / WHEP server — used by browser playback (low-latency, ~1 sec)
+###############################################################################
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: [127.0.0.1, localhost]
+webrtcAllowOrigin: "*"
+
+###############################################################################
+# RTMP / SRT — disabled, not needed for M1
+###############################################################################
+rtmp: no
+srt: no
+
+###############################################################################
+# Recording defaults (per-path can override)
+# Used by L5 threshold-breach clip cut.
+###############################################################################
+recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+recordFormat: fmp4
+recordPartDuration: 1s
+recordSegmentDuration: 60s
+recordDeleteAfter: 24h
+
+###############################################################################
+# Per-camera paths
+# Замаар <USER> / <PASS> / <IP>-г бодит утга руу солих. Password-д @ # : зэрэг
+# тусгай тэмдэг бий бол URL-encode хийх (жнь * → %2A, @ → %40, # → %23).
+###############################################################################
+paths:
+  # === Camera 1: Hikvision DS-class (standard /Streaming/Channels/101) ===
+  cam1_hik:
+    source: rtsp://<HIK_USER>:<HIK_PASS>@<HIK_IP>:554/Streaming/Channels/101
+    sourceProtocol: tcp
+    sourceOnDemand: no
+    record: yes
+
+  # === Camera 2: UNV (Uniview) modern firmware (/unicast/c1/s0/live for main) ===
+  # Older UNV firmware: try /media/video1 (main) or /media/video2 (sub).
+  # If camera serves H.265, log into web UI Setup → Video & Audio → Video,
+  # set "Video Compression" → H.264 on all enabled streams, click Save.
+  cam2_unv:
+    source: rtsp://<UNV_USER>:<UNV_PASS>@<UNV_IP>:554/unicast/c1/s0/live
+    sourceProtocol: tcp
+    sourceOnDemand: no
+    record: yes
+
+  # === Skyworth ZHCSDB6 — DROPPED 2026-05-28 ===
+  # P2P-only consumer camera (Tuya/iCSee-style cloud, "AI Home Camera" mobile app).
+  # ZHCSDB6 chipset, firmware V1.00.07. Reasons removed from M1:
+  #   1. P2P cloud dependency — fails Chipmo Sentry data sovereignty principle
+  #   2. H.265-only streams — browser HLS incompatible without transcode
+  #   3. No documented RTSP service path — port 554 open but DESCRIBE times out
+  #      on all common URLs (/onvif1, /onvif2, /live/0/main, /cam/realmonitor,
+  #      /11, /h264/..., /stream0)
+  #   4. OEM firmware, no vendor support / SLA / longevity guarantee
+  # Pilot customer guidance: standard RTSP cameras only — Hikvision, Dahua, UNV, Imou.
