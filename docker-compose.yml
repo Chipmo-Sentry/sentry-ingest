@@ -1,0 +1,20 @@
+# MediaMTX for a public VPS (Hetzner/etc) — the recommended host for the
+# cloud ingest, because WebRTC needs UDP and RTSP ingest needs raw TCP ports,
+# which PaaS platforms like Railway don't expose. `network_mode: host` lets
+# MediaMTX advertise the VPS's real ports/IP for WebRTC ICE.
+#
+#   1. Point a DNS A record (e.g. media.sentry.chipmo.mn) at the VPS.
+#   2. Open firewall: 8554/tcp (RTSP), 8888/tcp (HLS), 8889/tcp (WHEP),
+#      8189/tcp+udp (WebRTC media), and 9997/tcp restricted to the backend.
+#   3. Copy .env.example → .env, fill secrets + MTX_PUBLIC_HOST.
+#   4. docker compose up -d
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.18
+    container_name: sentry-mediamtx
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./mediamtx.cloud.yml:/mediamtx.yml:ro
+      - ./recordings:/recordings

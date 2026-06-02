@@ -1,0 +1,100 @@
+# MediaMTX config — Chipmo Sentry v3 CLOUD (publish topology)
+# ===========================================================================
+# Store agents PUBLISH each camera to rtsp://<this-host>:8554/<path> and the
+# central sentry-ai pulls rtsp://<this-host>:8554/<path> for detection, while
+# browsers/agent-pc play WebRTC (WHEP) at :8889. Paths are created dynamically
+# by sentry-backend (publish mode — no pull `source`) on camera register.
+#
+# All secrets come from env (set on the host / compose .env):
+#   MTX_PUBLISH_USER / MTX_PUBLISH_PASS   — store agents (publish)
+#   MTX_API_USER / MTX_API_PASS           — sentry-backend (control API)
+#   MTX_PUBLIC_HOST                       — this host's PUBLIC IP or domain
+# ===========================================================================
+
+logLevel: info
+logDestinations: [stdout]
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+###############################################################################
+# Control API — sentry-backend adds/removes paths here on camera register.
+# Protected by an authInternalUser with the `api` permission (see below).
+###############################################################################
+api: yes
+apiAddress: :9997
+
+metrics: no
+
+###############################################################################
+# Auth — built-in internal users. Path slugs are unguessable, but publish and
+# the control API still require credentials. (Hardening TODO: require auth for
+# read too, scoped per store — for now read is open so WHEP "just works".)
+###############################################################################
+authMethods: [internal]
+authInternalUsers:
+  # Browsers / agent-pc webview — read any stream (WHEP/HLS).
+  - user: any
+    permissions:
+      - action: read
+      - action: playback
+  # Store agents — publish their cameras.
+  - user: ${MTX_PUBLISH_USER}
+    pass: ${MTX_PUBLISH_PASS}
+    permissions:
+      - action: publish
+  # sentry-backend — dynamic path config via the control API.
+  - user: ${MTX_API_USER}
+    pass: ${MTX_API_PASS}
+    permissions:
+      - action: api
+      - action: read
+      - action: publish
+
+###############################################################################
+# RTSP — agents publish here; sentry-ai pulls here.
+###############################################################################
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+###############################################################################
+# HLS — fallback transport for browsers when WebRTC is blocked.
+###############################################################################
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAllowOrigin: "*"
+
+###############################################################################
+# WebRTC / WHEP — primary low-latency transport.
+# webrtcAdditionalHosts MUST include this host's PUBLIC address so the ICE
+# candidates are reachable from clients. UDP :8189 is preferred; the TCP
+# listener is the fallback when the client network blocks UDP.
+###############################################################################
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcAdditionalHosts: [${MTX_PUBLIC_HOST}]
+webrtcAllowOrigin: "*"
+
+rtmp: no
+srt: no
+
+###############################################################################
+# Recording — kept for L5 threshold-breach clip cuts. Tune retention to disk.
+###############################################################################
+recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+recordFormat: fmp4
+recordPartDuration: 1s
+recordSegmentDuration: 60s
+recordDeleteAfter: 24h
+
+# No static paths — sentry-backend creates them dynamically in publish mode.
+paths: {}
