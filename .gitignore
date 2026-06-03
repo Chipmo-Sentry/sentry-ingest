@@ -9,3 +9,8 @@ mediamtx.yml
 # Predator control kit runtime artifacts
 predator/run/
 predator/logs/
+
+# Local test config with real camera credentials — never commit
+mediamtx.local.yml
+.env
+recordings/
