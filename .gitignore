@@ -5,3 +5,7 @@ mediamtx.log
 
 # Real config with camera credentials — copy from mediamtx.yml.example, fill in creds, never commit
 mediamtx.yml
+
+# Predator control kit runtime artifacts
+predator/run/
+predator/logs/

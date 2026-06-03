@@ -1,0 +1,39 @@
+# cloudflared tunnel config for the Predator center.
+# Copy to  %USERPROFILE%\.cloudflared\config.yml  (or pass --config).
+#
+# One-time setup:
+#   cloudflared tunnel login
+#   cloudflared tunnel create sentry-ingest
+#   # note the tunnel UUID + credentials json path it prints, fill below
+#   cloudflared tunnel route dns sentry-ingest media.sentry.chipmo.mn
+#   cloudflared tunnel route dns sentry-ingest ai.sentry.chipmo.mn
+#   cloudflared tunnel route dns sentry-ingest mtxapi.sentry.chipmo.mn
+#
+# Then run it (or install as a service via predator install-services).
+
+tunnel: sentry-ingest
+credentials-file: C:\Users\YOU\.cloudflared\<TUNNEL-UUID>.json
+
+ingress:
+  # MediaMTX HLS + WebRTC/WHEP playback — consumed by the frontend /live page.
+  # Set frontend NEXT_PUBLIC_MEDIAMTX_HLS_BASE / _WHEP_BASE to these.
+  - hostname: media.sentry.chipmo.mn
+    service: http://localhost:8888
+  - hostname: whep.sentry.chipmo.mn
+    service: http://localhost:8889
+
+  # sentry-ai live worker control — the Railway backend POSTs /v1/live/start
+  # here. Set backend SENTRY_AI_URL=https://ai.sentry.chipmo.mn
+  - hostname: ai.sentry.chipmo.mn
+    service: http://localhost:8001
+
+  # MediaMTX control API (:9997) — the backend adds/removes camera paths here.
+  # Set backend MEDIAMTX_API_URL=https://mtxapi.sentry.chipmo.mn
+  # PROTECT IT: enable MediaMTX api auth (MTX_API_USER / MTX_API_PASS) and set
+  # the matching MEDIAMTX_API_USER / MEDIAMTX_API_PASS on the backend. Do NOT
+  # expose 9997 unauthenticated.
+  - hostname: mtxapi.sentry.chipmo.mn
+    service: http://localhost:9997
+
+  # Required catch-all.
+  - service: http_status:404
