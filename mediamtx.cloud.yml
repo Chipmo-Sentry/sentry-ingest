@@ -9,6 +9,9 @@
 #   MTX_PUBLISH_USER / MTX_PUBLISH_PASS   — store agents (publish)
 #   MTX_API_USER / MTX_API_PASS           — sentry-backend (control API)
 #   MTX_PUBLIC_HOST                       — this host's PUBLIC IP or domain
+#   MTX_ALLOW_ORIGIN                      — frontend origin allowed to play
+#                                           WHEP/HLS (e.g. https://app.sentry.chipmo.mn).
+#                                           Do NOT leave as "*" in production.
 # ===========================================================================
 
 logLevel: info
@@ -28,29 +31,19 @@ apiAddress: :9997
 metrics: no
 
 ###############################################################################
-# Auth — built-in internal users. Path slugs are unguessable, but publish and
-# the control API still require credentials. (Hardening TODO: require auth for
-# read too, scoped per store — for now read is open so WHEP "just works".)
+# Auth via sentry-backend (authHTTP). Every action (read/playback/publish/api)
+# is authorized by the backend's /api/v1/internal/mediamtx-auth endpoint:
+#   • read/playback → a valid per-camera read token in the URL (?jwt=…), minted
+#     by the backend for authenticated org members — closes the old `user: any`
+#     open read so tenants can't watch each other's cameras.
+#   • publish       → the MTX_PUBLISH_USER/PASS credentials.
+#   • api           → the MTX_API_USER/PASS credentials.
+# Backend must have MEDIAMTX_PUBLISH_USER/PASS + MEDIAMTX_API_USER/PASS set to
+# the SAME values, and (optionally) MEDIAMTX_AUTH_SECRET == this host's secret.
+#   MTX_AUTH_URL e.g. https://api.sentry.chipmo.mn/api/v1/internal/mediamtx-auth
 ###############################################################################
-authMethods: [internal]
-authInternalUsers:
-  # Browsers / agent-pc webview — read any stream (WHEP/HLS).
-  - user: any
-    permissions:
-      - action: read
-      - action: playback
-  # Store agents — publish their cameras.
-  - user: ${MTX_PUBLISH_USER}
-    pass: ${MTX_PUBLISH_PASS}
-    permissions:
-      - action: publish
-  # sentry-backend — dynamic path config via the control API.
-  - user: ${MTX_API_USER}
-    pass: ${MTX_API_PASS}
-    permissions:
-      - action: api
-      - action: read
-      - action: publish
+authMethod: http
+authHTTPAddress: ${MTX_AUTH_URL}
 
 ###############################################################################
 # RTSP — agents publish here; sentry-ai pulls here.
@@ -69,7 +62,10 @@ hlsVariant: lowLatency
 hlsSegmentCount: 7
 hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
-hlsAllowOrigin: "*"
+# Scope CORS to the frontend origin (env). Tenant video must not be embeddable
+# by arbitrary origins. MTX_ALLOW_ORIGIN is REQUIRED (set it to the frontend
+# origin); for local-only testing set it to "*" explicitly.
+hlsAllowOrigin: ${MTX_ALLOW_ORIGIN}
 
 ###############################################################################
 # WebRTC / WHEP — primary low-latency transport.
@@ -82,19 +78,26 @@ webrtcAddress: :8889
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcAdditionalHosts: [${MTX_PUBLIC_HOST}]
-webrtcAllowOrigin: "*"
+# Scope CORS to the frontend origin (env) — see hlsAllowOrigin above.
+webrtcAllowOrigin: ${MTX_ALLOW_ORIGIN}
 
 rtmp: no
 srt: no
 
 ###############################################################################
 # Recording — kept for L5 threshold-breach clip cuts. Tune retention to disk.
+# In MediaMTX 1.18 recording config lives under pathDefaults (applies to every
+# dynamically-created path). Without `record: yes` here, dynamic paths default
+# to record:no and the L5 breach-clip cut has nothing to cut. Mirrors
+# mediamtx.local.yml.
 ###############################################################################
-recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
-recordFormat: fmp4
-recordPartDuration: 1s
-recordSegmentDuration: 60s
-recordDeleteAfter: 24h
+pathDefaults:
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 60s
+  recordDeleteAfter: 24h
 
 # No static paths — sentry-backend creates them dynamically in publish mode.
 paths: {}
