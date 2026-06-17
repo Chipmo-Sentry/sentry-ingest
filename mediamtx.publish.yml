@@ -1,0 +1,78 @@
+# PUBLISH-mode config (push topology) — the AGENT publishes each camera here;
+# MediaMTX does NOT pull cameras. So each camera is touched ONCE (by the agent),
+# and MediaMTX fans the published stream out to N web viewers + the AI worker.
+#
+# Run on the node (replaces mediamtx.local.yml):
+#   sentry-ingest\bin\mediamtx.exe sentry-ingest\mediamtx.publish.yml
+#
+# ⚠️ Set <NODE_LAN_IP> below to THIS machine's LAN IP (e.g. 192.168.1.50) so
+#    browsers on the network get a reachable WebRTC ICE candidate. Same IP goes
+#    in the backend env AGENT_STREAM_PUSH_URL=rtsp://<NODE_LAN_IP>:8554 .
+logLevel: info
+logDestinations: [stdout]
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+# Control API stays on loopback — the backend auto-creating paths is optional in
+# publish mode (the agent's publish auto-creates the path via pathDefaults), so
+# the API does NOT need to be reachable from the internet.
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# RTSP ingest — the agent PUBLISHES here (auth required), the AI worker pulls
+# from rtsp://127.0.0.1:8554/<path> on this same machine.
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsAllowOrigin: "*"
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+# Advertise every address a browser might reach this node on, so WebRTC ICE
+# works whether the viewer is local, on the camera LAN, or over ZeroTier.
+webrtcAdditionalHosts: [127.0.0.1, localhost, 192.168.1.100, 10.147.20.119]
+webrtcAllowOrigin: "*"
+
+rtmp: no
+srt: no
+
+# Publish requires the agent's credentials; reads stay open on the LAN (matches
+# the previous config). The agent gets these creds from the backend
+# /agent/stream-config (MEDIAMTX_PUBLISH_USER/PASS — already set on Railway).
+authInternalUsers:
+  - user: chipmo_pub
+    pass: ANmpxHcvBLAgrjWbRLNAzIzcENudUNAJ
+    permissions:
+      - action: publish
+  - user: any
+    permissions:
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+
+# Recording for L5 breach clips (applies to every published path).
+pathDefaults:
+  record: yes
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 60s
+  recordDeleteAfter: 2h
+
+# No static paths with sources — the agent publishes to camera-slug paths
+# (192_168_1_64 etc.), which are created on demand against pathDefaults.
+paths:
+  test:

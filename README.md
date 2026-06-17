@@ -1,72 +1,109 @@
 # sentry-ingest
 
-> Live video ingest + rolling buffer + threshold-breach clip cut.
-> M1 (current): MediaMTX standalone binary on dev laptop, RTSP pull from 3 LAN cameras.
-> M2: Docker + MediaMTX on Hetzner VPS + thin Python control plane + WHIP push from sentry-agent-pc.
+The live-video plane of **Chipmo Sentry**. A thin, config-driven wrapper around
+**[MediaMTX](https://github.com/bluenviron/mediamtx)** (a Go media server) plus a PowerShell ops kit for
+running it — and its siblings — as services on the AI host.
 
-## M1 quickstart (Phase L0)
+MediaMTX is the **single fan-out point**: every camera is ingested exactly once, then served many ways —
+`sentry-ai` pulls RTSP for inference, browsers play WHEP/WHS, and breach clips are cut from its recordings.
+
+> **Never runs on Railway.** WebRTC/WHEP needs UDP + a reachable public IP, which an HTTP-first PaaS can't
+> provide. This runs on the GPU host (Predator laptop today, a public GPU VPS at scale) — exposed via a
+> Cloudflare Tunnel for HLS, or a direct public IP for full WebRTC ([ADR-0016](../docs/07-DECISIONS.md)).
+
+---
+
+## Two topologies
+
+| Config | Mode | Where | What |
+|---|---|---|---|
+| `mediamtx.local.yml` | **pull** | dev laptop on the camera LAN | MediaMTX pulls RTSP straight from the 3 cameras (static paths) |
+| `mediamtx.cloud.yml` | **publish** | public GPU VPS | store agents **push** (RTSP/WHIP); the backend creates paths dynamically |
+
+The whole system flips between them with one backend env var (`AGENT_STREAM_PUSH_URL`): unset = LAN pull,
+set = agents push to a central relay.
+
+### Ports
+
+| Port | Proto | Purpose |
+|---|---|---|
+| 8554 | RTSP (TCP) | agent publish / `sentry-ai` pull |
+| 8888 | HTTP | HLS (fallback playback) |
+| 8889 | HTTP | WHEP (WebRTC signalling) |
+| 8189 | UDP+TCP | WebRTC media (ICE) |
+| 9997 | HTTP | control API (backend adds/removes camera paths) |
+
+### Security & recording
+
+- **Auth** — `authMethod: http` points every read/publish/api action at the backend's
+  `/api/v1/internal/mediamtx-auth`, which validates a stream token, publish credentials, or a shared
+  secret. CORS is scoped to the frontend origin.
+- **Recording** — `pathDefaults` records fmp4 (1 s parts, 60 s segments) with a retention window (24 h
+  cloud / 2 h dev). These segments are what `sentry-ai`'s `cut-verify` slices for live-breach clips (L5).
+
+---
+
+## Quick start (local / dev)
 
 ```powershell
-# 0. Download MediaMTX binary (one-time, ~25 MB) — gitignored
-$rel = Invoke-RestMethod "https://api.github.com/repos/bluenviron/mediamtx/releases/latest"
-$url = ($rel.assets | Where-Object name -match "windows_amd64\.zip$").browser_download_url
-$ProgressPreference = 'SilentlyContinue'
-Invoke-WebRequest $url -OutFile bin.zip
-Expand-Archive bin.zip -DestinationPath bin -Force
-Remove-Item bin.zip, bin\mediamtx.yml  # remove bundled default config
-
-# 1. Copy template, fill camera credentials — never commit this file
-Copy-Item mediamtx.yml.example mediamtx.yml
-notepad mediamtx.yml
-# Replace <HIK_USER>/<HIK_PASS>/<HIK_IP> + <UNV_*> placeholders.
-# Password-д @#:* зэрэг тусгай тэмдэг бий бол URL-encode (жнь * → %2A).
-
-# 2. Start MediaMTX (foreground, Ctrl+C to stop)
-.\bin\mediamtx.exe .\mediamtx.yml
-
-# 3. Өөр терминалаас — RTSP source connect эсэхийг log-аас ажиглах
-Get-Content .\mediamtx.log -Tail 30 -Wait
-# Хүлээх log:
-#   INF [path cam1_hik] [RTSP source] started
-#   INF [path cam1_hik] stream is available and online, 1 track (H264)
-
-# 4. Live API summary
-Invoke-RestMethod http://127.0.0.1:9997/v3/paths/list | Select-Object -Expand items |
-  Select-Object name,ready,@{N='codec';E={$_.tracks2[0].codec}},bytesReceived |
-  Format-Table -AutoSize
+# 1. Download the MediaMTX binary into bin/ (gitignored). See the MediaMTX releases page.
+# 2. Point a config at your cameras
+Copy-Item mediamtx.local.yml mediamtx.yml      # edit camera IPs + credentials
+# 3. Run it
+.\bin\mediamtx.exe mediamtx.yml
 ```
 
-## Browser playback verify
+Verify: the log shows each camera path `ready=true`; HLS serves at `http://localhost:8888/<path>/`,
+WHEP at `http://localhost:8889/<path>/`, and the control API answers on `:9997`. A synthetic `test` path is
+included so you can verify the transport without cameras on the LAN.
 
-| Кам | WebRTC (low-latency ~1s) | HLS (compat ~3-5s) |
-|---|---|---|
-| Hikvision | http://localhost:8889/cam1_hik | http://localhost:8888/cam1_hik/index.m3u8 |
-| UNV (H.264 codec шаардлагатай) | http://localhost:8889/cam2_unv | http://localhost:8888/cam2_unv/index.m3u8 |
+## Quick start (cloud / VPS)
 
-WebRTC URL-ыг Chrome-д шууд нээж WHEP playback харж болно (MediaMTX built-in test page).
+```bash
+cp .env.example .env       # MTX_PUBLIC_HOST, MTX_ALLOW_ORIGIN, MTX_PUBLISH_*, MTX_API_*, MTX_AUTH_URL
+docker compose up -d       # bluenviron/mediamtx, network_mode: host, mediamtx.cloud.yml
+```
 
-> ⚠ **Skyworth ZHCSDB6 dropped 2026-05-28** — P2P-only consumer firmware (Tuya/iCSee-style cloud), no documented RTSP. Production pilots must use standard RTSP cameras (Hikvision/Dahua/UNV/Imou). См. mediamtx.yml comment + docs/14-LIVE-PIPELINE-PLAN.md §1.1.
+`docker-compose.yml` runs with `network_mode: host` (real IP + UDP for ICE) and mounts the cloud config
+read-only plus a `recordings/` volume. Full topology + the backend env vars that pair with it are in
+**[DEPLOY.md](DEPLOY.md)**.
 
-## Ports
+---
 
-| Port | Protocol | Purpose |
-|---|---|---|
-| 8554 | RTSP | Internal — sentry-ai live worker subscribes (Phase L2) |
-| 8888 | HTTP | HLS playback for browser |
-| 8889 | HTTP | WHEP signaling for WebRTC |
-| 8189 | UDP | WebRTC media (ICE) |
-| 9997 | HTTP | REST API (live status, used by L5 clip cut control) |
+## Layout
 
-## Recordings
+```
+mediamtx.local.yml    — dev pull config (3 LAN cameras)
+mediamtx.cloud.yml    — VPS publish config (dynamic paths, http auth)
+mediamtx.yml.example  — annotated template
+docker-compose.yml    — VPS deployment
+DEPLOY.md             — end-to-end topology + env reference
+bin/mediamtx.exe      — the Go binary (download separately; gitignored)
+predator/             — PowerShell ops kit (see below)
+recordings/           — fmp4 segments (gitignored)
+```
 
-`./recordings/<cam_path>/YYYY-MM-DD_HH-MM-SS-*` — fmp4, 60-sec segments, auto-delete after 24h.
-Used by L5 threshold-breach clip cut endpoint.
+### Predator ops kit (`predator/`)
 
-## Tools
+PowerShell scripts that run the whole AI host — **ollama → ingest (MediaMTX) → sentry-ai → cloudflared
+tunnel** — as managed processes or Windows services on the "Predator" laptop:
 
-`./bin/mediamtx.exe` — MediaMTX v1.18.2 Windows amd64 binary. Gitignored — re-download via [docs/14-LIVE-PIPELINE-PLAN.md](../docs/14-LIVE-PIPELINE-PLAN.md).
+- `predator.ps1` — start / stop / restart / status / health / logs for one or all components.
+- `install-services.ps1` / `uninstall-services.ps1` — register each as an NSSM Windows service
+  (`ChipmoSentry-*`), auto-restart on crash, logs to `predator/logs/`.
+- `predator.config.ps1` — shared paths, ports, tunnel name, and component order.
 
-## See also
+> This kit is the manual/dev path. The **production** path is the one-installer `ChipmoSentryAi-Setup.exe`
+> in [sentry-ai](https://github.com/Chipmo-Sentry/sentry-ai)`/installer/`, which sets the same services up
+> from a wizard.
 
-- [docs/14-LIVE-PIPELINE-PLAN.md](../docs/14-LIVE-PIPELINE-PLAN.md) — full M1-LIVE build plan
-- [docs/07-DECISIONS.md ADR-0014](../docs/07-DECISIONS.md) — M1 live-first pivot rationale
+---
+
+## Related repos
+
+- [sentry-ai](https://github.com/Chipmo-Sentry/sentry-ai) — pulls RTSP from here for inference (co-located)
+- [sentry-agent-pc](https://github.com/Chipmo-Sentry/sentry-agent-pc) — pushes camera streams here (cloud mode)
+- [sentry-backend](https://github.com/Chipmo-Sentry/sentry-backend) — manages paths via the control API + auth hook
+
+Platform overview: [Sentry-v.3 README](../README.md). Camera-bring-up checklist:
+[docs/16-CAMERA-TEST-CHECKLIST.md](../docs/16-CAMERA-TEST-CHECKLIST.md).
